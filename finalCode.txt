@@ -1,0 +1,125 @@
+##########################################################################
+## First run R code
+
+setwd('C:\\Users\\everyday use\\Dropbox\\Luann\\Challenge1Data\\for_submission')
+
+train=read.csv('Challenge_1_Training.csv')
+attach(train)
+table(readmitted)
+train$admission_source_id=as.factor(admission_source_id)
+train$discharge_disposition_id = as.factor(discharge_disposition_id)
+train$admission_type_id =as.factor(admission_type_id)
+source('functions.r')
+
+# split the given data into training and test data so that 
+# the training data can be used to do model training and test data to see 
+# performance of the model. Split into k=5 folds. The last fold is for test data.
+
+k=5
+train_test_split_index= balanced.folds(readmitted, nfold=k)
+all_index=seq(nrow(train))
+train_index= all_index[-train_test_split_index[[k]]  ]    
+test_index=train_test_split_index[[k]]
+
+# check to see which variables has no (or nearly no different values)
+rem=NULL
+for (i in 1:ncol(train)){
+#if (length(summary(train[,i]) )==1 ) rem=c(rem, i)
+print(i)
+print(summary(train[,i]) )
+}
+
+removeFactor=c(1,2, 30, 38, 40, 41,45, 46 , 47
+)
+colnames(train[,removeFactor])
+trainDat=data.frame(train[train_index, -removeFactor ])
+trainY=as.factor(trainDat[, ncol(trainDat)])
+trainX= model.matrix(readmitted ~ . , data=trainDat )[,-1]
+#trainX2= model.matrix(readmitted ~ .*. , data=trainDat )[,-1]   #not enough memory
+dim(trainX)
+write.csv(trainX, file='trainXtemp.csv', row.names=F)
+write.csv(trainY, file='trainY.csv', row.names=F)
+
+testDat=data.frame(train[test_index, -removeFactor ])
+testX=model.matrix( ~ . , data=testDat[,-ncol(testDat)]  )[,-1]
+testY=as.factor(testDat[, ncol(testDat)])
+write.csv(testX, file='testXtemp.csv', row.names=F)
+write.csv(testY, file='testY.csv', row.names=F)
+
+install.packages('glmnet')
+library(glmnet)
+cv1=cv.glmnet(trainX, trainY, family="multinomial", alpha=1, type.measure="class")
+plot(cv1)
+Ypred=predict ( cv1, newx=testX, s=cv1$lambda.min, type ="class") 
+res=table(Ypred, drop(as.matrix(testY)))
+sum(diag(res))/sum(res)    #overall misclassification erro
+(res[1,2]+res[2,1]+res[1,3]+res[3,1])/sum(res)   #misclassificaiton error of <30 versus other
+fit=glmnet(trainX, trainY, family="multinomial", alpha=1, type.measure="class",s=cv1$lambda.min)
+plot(cv1, xvar='dev', s=cv1$lambda.min)
+coef(fit)
+
+
+##########################################################################
+# R is very slow to run cv.glmnet for this dataset. Python is much faster
+# From Dos version of Python window, run the following code
+
+import os
+import pandas as pd
+import numpy as np
+import statsmodels.api as statmod
+import pylab   #for generating plots
+#import pasty
+
+from sklearn.cross_validation import train_test_split
+from sklearn.linear_model import LogisticRegression as LR
+from sklearn.metrics import roc_auc_score as AUC
+from patsy.contrasts import Treatment
+from patsy import (ModelDesc,dmatrices, dmatrix, Term, LookupFactor)
+os.chdir('C:\\Users\\everyday use\\Dropbox\\Luann\\Challenge1Data')
+
+train75DesignMatrix = pd.read_csv("trainXtemp.csv")   # from R output
+train75Y = pd.read_csv("trainY.csv")
+test75DesignMatrix = pd.read_csv("testXtemp.csv")
+test75Y = pd.read_csv("testY.csv")
+
+
+pathname='C:\\Users\\everyday use\\Dropbox\\Luann\\Challenge1Data\\'
+from sklearn.metrics import accuracy_score
+def train_and_eval_accuracy( model, train_x, train_y, test_x, test_y , filename):	
+    model.fit( train_x, train_y )	
+    p = model.predict( test_x )	
+    output = pd.DataFrame( data={ "readmitted":p} )
+    # Use pandas to write the comma-separated output file
+    output.to_csv(os.path.join(os.path.dirname(pathname), filename), index=False, quoting=3)    
+    print "Wrote results to"+ filename
+    #my_accuracy = accuracy_score(actual_labels, predicted_labels, normalize=False) / float(actual_labels.size)
+    my_accuracy = accuracy_score(test_y, p, normalize=False) / float(test_y.size)
+    #accuracy=model.score(test_x, test_y)    
+    return accuracy
+
+
+### Lasso logistic regression
+lr = LR(penalty='l1', multi_class='ovr')
+accuLR=train_and_eval_accuracy(lr, train75DesignMatrix, train75Y, test75DesignMatrix, test75Y, 'LRRound2predict.csv')
+print "logistic regression accuracy:", accuLR
+
+## try Lasso logistic regression with specifying class weight; Did not improve result. So forget it. 
+lrw= LR(penalty='l1', multi_class='ovr', class_weight={'<30':0.25, '>30':0.4, 'No':035} ) 
+accuLRweighted=train_and_eval_accuracy(lr, train75DesignMatrix, train75Y, test75DesignMatrix, test75Y, 'LRweightedpredict.csv')
+print "logistic regression accuracy:", accuLRweighted
+
+
+# Random Forest classifier with 100 trees 
+from sklearn.ensemble import RandomForestClassifier 
+forest = RandomForestClassifier(n_estimators = 100)
+# Fit the forest to the training set
+accuRF=train_and_eval_accuracy(forest, train75DesignMatrix, train75Y, test75DesignMatrix, test75Y, 'RandomForestPred.csv')
+print "Random Forest accuracy:", accuRF
+
+
+## SVM is very very slow. Not worth to run it
+#from sklearn import svm
+#clf=svm.SVC()
+#train_and_eval_accuracy(clf, train75DesignMatrix, train75Y, test75DesignMatrix, test75Y)
+#print "SVM accuracy:", accu
+##SVM accuracy: 0.55964   (or 0.584375 but maybe carried from L1 result)   #too slow. Don't use it again. 
